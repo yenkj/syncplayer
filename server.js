@@ -1,4 +1,3 @@
-// server.js
 const express = require('express');
 const app = express();
 const http = require('http').createServer(app);
@@ -6,20 +5,64 @@ const io = require('socket.io')(http);
 
 app.use(express.static('public'));
 
-const rooms = {}; // 保存每个房间的信息
+const rooms = {};
 
 io.on('connection', (socket) => {
   console.log('用户连接:', socket.id);
 
-  socket.on('joinRoom', ({ room, password, username }, callback) => {
-    if (!room || !password || !username) {
+  // 普通用户加入房间
+  socket.on('joinRoom', ({ room, username, watchPassword }, callback) => {
+    if (!room || !username) {
+      return callback({ success: false, message: '房间名和用户名不能为空' });
+    }
+
+    const roomData = rooms[room];
+
+    if (!roomData) {
+      return callback({ success: false, message: '房间不存在，请等待主持人创建' });
+    }
+
+    if (roomData.watchPassword === null) {
+      return callback({ success: false, message: '房间观看密码尚未设置，请稍后再试' });
+    }
+
+    if (roomData.watchPassword !== watchPassword) {
+      return callback({ success: false, message: '观看密码错误' });
+    }
+
+    socket.join(room);
+    roomData.users[socket.id] = username;
+    socket.data.room = room;
+    socket.data.username = username;
+
+    socket.emit('videoUpdate', {
+      videoUrl: roomData.videoUrl,
+      subtitleUrl: roomData.subtitleUrl,
+    });
+    socket.emit('videoState', roomData.videoState);
+
+    socket.to(room).emit('chatMessage', {
+      id: '系统',
+      msg: `${username} 加入了房间`,
+    });
+
+    callback({ success: true });
+  });
+
+  // 主持人登录或首次创建房间（携带主持人密码和观看密码）
+  socket.on('hostLogin', ({ room, hostPassword, watchPassword, username }, callback) => {
+    if (!room || !hostPassword || !watchPassword || !username) {
       return callback({ success: false, message: '参数不完整' });
     }
 
-    if (!rooms[room]) {
+    let roomData = rooms[room];
+
+    if (!roomData) {
+      // 首次创建房间，主持人设定密码
       rooms[room] = {
-        password,
-        hostId: null,
+        hostPassword,
+        watchPassword,
+        hostId: socket.id,
         videoUrl: '',
         subtitleUrl: '',
         videoState: {
@@ -29,42 +72,49 @@ io.on('connection', (socket) => {
         },
         users: {},
       };
-    } else if (rooms[room].password !== password) {
-      return callback({ success: false, message: '密码错误' });
+      roomData = rooms[room];
+      console.log(`房间 ${room} 被首次创建，主持人设定密码`);
+    } else {
+      // 房间已存在，验证主持人密码
+      if (roomData.hostPassword !== hostPassword) {
+        return callback({ success: false, message: '主持人密码错误' });
+      }
+      if (roomData.hostId) {
+        return callback({ success: false, message: '房间已有主持人' });
+      }
+      roomData.hostId = socket.id;
     }
 
     socket.join(room);
-    rooms[room].users[socket.id] = username;
+    roomData.users[socket.id] = username;
     socket.data.room = room;
     socket.data.username = username;
 
-    // 初始状态发送
+    socket.emit('hostAssigned');
     socket.emit('videoUpdate', {
-      videoUrl: rooms[room].videoUrl,
-      subtitleUrl: rooms[room].subtitleUrl,
+      videoUrl: roomData.videoUrl,
+      subtitleUrl: roomData.subtitleUrl,
     });
-    socket.emit('videoState', rooms[room].videoState);
+    socket.emit('videoState', roomData.videoState);
 
-    // 广播新用户加入
     socket.to(room).emit('chatMessage', {
       id: '系统',
-      msg: `${username} 加入了房间`
+      msg: `${username} 成为主持人`,
     });
 
-    return callback({ success: true });
+    callback({ success: true });
   });
 
-  socket.on('loginAsHost', ({ password }, callback) => {
+  // 主持人修改密码
+  socket.on('hostChangePasswords', ({ newHostPassword, newWatchPassword }, callback) => {
     const room = socket.data.room;
-    if (!room || !rooms[room]) return;
-    if (rooms[room].hostId) return callback(false);
-    if (password === 'admin123') {
-      rooms[room].hostId = socket.id;
-      socket.emit('hostAssigned');
-      callback(true);
-    } else {
-      callback(false);
-    }
+    if (!room || !rooms[room]) return callback({ success: false, message: '房间不存在' });
+    if (rooms[room].hostId !== socket.id) return callback({ success: false, message: '无权限' });
+
+    if (newHostPassword) rooms[room].hostPassword = newHostPassword;
+    if (newWatchPassword) rooms[room].watchPassword = newWatchPassword;
+
+    callback({ success: true, message: '密码已更新' });
   });
 
   socket.on('chatMessage', (msg) => {
@@ -120,7 +170,6 @@ io.on('connection', (socket) => {
       io.to(room).emit('chatMessage', { id: '系统', msg: `${username} 离开了房间` });
     }
 
-    // 如果房间空了，就删除
     if (Object.keys(rooms[room].users).length === 0) {
       delete rooms[room];
       console.log('房间被销毁:', room);
