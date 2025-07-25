@@ -3,7 +3,6 @@
 <head>
   <meta charset="UTF-8" />
   <title>Artplayer 同步播放</title>
-  <link href="https://cdn.jsdelivr.net/npm/artplayer/dist/artplayer.min.css" rel="stylesheet" />
   <style>
     body { margin:0; display:flex; height:100vh; font-family: Arial, sans-serif;}
     #player { flex: 2; }
@@ -35,7 +34,7 @@
 
 <script src="/socket.io/socket.io.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/artplayer@5.2.3/dist/artplayer.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/artplayer/dist/libass.min.js"></script>
+
 
 <script>
   const urlParams = new URLSearchParams(window.location.search);
@@ -44,7 +43,6 @@
 
   const socket = io();
 
-  // 自定义视频和字幕地址，改成你自己的直链即可
   const videoUrl = urlParams.get('video') || 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8';
   const subtitleUrl = urlParams.get('subtitle') || 'https://raw.githubusercontent.com/Arnavion/libjass/master/demo/sample.ass';
 
@@ -57,7 +55,7 @@
     subtitle: {
       url: subtitleUrl,
       encoding: 'utf-8',
-      type: 'ass'
+      type: 'ass',
     }
   });
 
