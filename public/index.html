@@ -1,152 +1,290 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh">
 <head>
   <meta charset="UTF-8" />
-  <title>Artplayer 同步播放</title>
+  <title>ArtPlayer 多人同步播放</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://cdn.jsdelivr.net/npm/artplayer@5.2.3/dist/artplayer.min.js"></script>
+  <script src="/socket.io/socket.io.js"></script>
   <style>
-    body { margin:0; display:flex; height:100vh; font-family: Arial, sans-serif;}
-    #player { flex: 2; }
-    #sidebar { flex: 1; background:#f0f0f0; display:flex; flex-direction: column;}
-    #chat { flex: 1; overflow-y:auto; padding:10px; border-top:1px solid #ccc;}
-    #chat input { width: 80%; padding:5px; }
-    #chat button { width: 18%; padding:5px; }
-    #usersCount, #hostControls { padding:10px; background:#ddd; }
+    body { font-family: sans-serif; margin: 0; background: #121212; color: #fff; }
+    #login { display: flex; flex-direction: column; align-items: center; padding: 2rem; }
+    #main { display: none; padding: 1rem; }
+    #player { width: 100%; height: 60vh; margin-bottom: 1rem; background: black; }
+    #chat { max-height: 30vh; overflow-y: auto; border: 1px solid #555; padding: 0.5rem; margin-top: 1rem; }
+    #chat-input { width: 100%; padding: 0.5rem; margin-top: 0.5rem; }
+    #host-panel { display: none; margin-top: 1rem; }
+    input, button {
+      padding: 0.5rem; margin: 0.3rem 0; width: 100%; max-width: 300px;
+      background: #222; color: white; border: 1px solid #444; border-radius: 3px;
+    }
+    button:hover {
+      background: #444;
+      cursor: pointer;
+    }
+    .message { margin-bottom: 0.3rem; }
+    .system { color: #999; font-style: italic; }
+    .chat-msg { padding: 0.2rem 0; border-bottom: 1px solid #333; }
   </style>
 </head>
 <body>
 
-<div id="player"></div>
+<div id="login">
+  <h2>普通用户加入</h2>
+  <input type="text" id="username" placeholder="用户名" autocomplete="off" />
+  <input type="text" id="room" placeholder="房间名" autocomplete="off" />
+  <input type="password" id="watchPassword" placeholder="观看密码" autocomplete="off" />
+  <button id="joinBtn">进入房间</button>
 
-<div id="sidebar">
-  <div id="usersCount">在线人数: 0</div>
-  <div id="hostControls" style="display:none;">
-    <button id="btnPlay">播放</button>
-    <button id="btnPause">暂停</button>
-    <input type="number" id="seekInput" min="0" step="1" placeholder="跳转秒数" />
-    <button id="btnSeek">跳转</button>
-  </div>
-  <div id="chat">
-    <div id="chatMessages"></div>
-    <input id="chatInput" placeholder="输入消息..." />
-    <button id="btnSend">发送</button>
-  </div>
+  <hr style="width: 300px; margin: 2rem 0;" />
+  <h2>主持人登录或首次创建房间</h2>
+  <input type="text" id="hostUsername" placeholder="主持人用户名" autocomplete="off" />
+  <input type="text" id="hostRoom" placeholder="房间名" autocomplete="off" />
+  <input type="password" id="hostPassword" placeholder="主持人密码" autocomplete="off" />
+  <input type="password" id="setWatchPassword" placeholder="设置观看密码" autocomplete="off" />
+  <button id="hostLoginBtn">登录/创建房间</button>
+
+  <div id="loginMsg" style="color: #f44; margin-top: 1rem;"></div>
 </div>
 
-<script src="/socket.io/socket.io.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/artplayer@5.2.3/dist/artplayer.min.js"></script>
+<div id="main">
+  <div id="player"></div>
 
+  <div id="host-panel">
+    <h3>🎛 主持人控制面板</h3>
+    <input type="text" id="videoUrl" placeholder="视频链接 (支持直链)" autocomplete="off" />
+    <input type="text" id="subtitleUrl" placeholder="字幕链接 (.ass)" autocomplete="off" />
+    <button id="sendVideo">添加视频</button>
+    <button id="sendSubtitle">添加字幕</button>
+    <button id="playBtn">播放</button>
+    <button id="pauseBtn">暂停</button>
+
+    <hr />
+    <h4>修改密码</h4>
+    <input type="password" id="newHostPassword" placeholder="新主持人密码" autocomplete="off" />
+    <input type="password" id="newWatchPassword" placeholder="新观看密码" autocomplete="off" />
+    <button id="changePasswordsBtn">修改密码</button>
+
+    <div id="changePwdMsg" style="color: #4f4; margin-top: 0.5rem;"></div>
+  </div>
+
+  <div id="chat"></div>
+  <input type="text" id="chat-input" placeholder="输入消息回车发送" autocomplete="off" />
+</div>
 
 <script>
-  const urlParams = new URLSearchParams(window.location.search);
-  const roomId = urlParams.get('room') || 'default-room';
-  const isHost = urlParams.get('host') === '1';
-
   const socket = io();
 
-  const videoUrl = urlParams.get('video') || 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8';
-  const subtitleUrl = urlParams.get('subtitle') || 'https://raw.githubusercontent.com/Arnavion/libjass/master/demo/sample.ass';
+  let artplayer = null;
+  let isHost = false;
 
-  const player = new Artplayer({
-    container: '#player',
-    url: videoUrl,
-    autoplay: false,
-    muted: false,
-    playsInline: true,
-    subtitle: {
-      url: subtitleUrl,
-      encoding: 'utf-8',
-      type: 'ass',
+  // 登录和加入房间元素
+  const loginDiv = document.getElementById('login');
+  const mainDiv = document.getElementById('main');
+  const hostPanel = document.getElementById('host-panel');
+  const loginMsg = document.getElementById('loginMsg');
+  const changePwdMsg = document.getElementById('changePwdMsg');
+
+  // 普通用户加入
+  document.getElementById('joinBtn').onclick = () => {
+    const username = document.getElementById('username').value.trim();
+    const room = document.getElementById('room').value.trim();
+    const watchPassword = document.getElementById('watchPassword').value.trim();
+
+    if (!username || !room || !watchPassword) {
+      loginMsg.textContent = '请输入用户名、房间名和观看密码';
+      return;
+    }
+    loginMsg.textContent = '';
+
+    socket.emit('joinRoom', { room, username, watchPassword }, (res) => {
+      if (res.success) {
+        isHost = false;
+        loginDiv.style.display = 'none';
+        mainDiv.style.display = 'block';
+        hostPanel.style.display = 'none';
+        initPlayer();
+        appendChatMessage('系统', `欢迎 ${username} 加入房间 ${room}`);
+      } else {
+        loginMsg.textContent = res.message || '加入失败';
+      }
+    });
+  };
+
+  // 主持人登录或首次创建房间
+  document.getElementById('hostLoginBtn').onclick = () => {
+    const username = document.getElementById('hostUsername').value.trim() || '主持人';
+    const room = document.getElementById('hostRoom').value.trim();
+    const hostPassword = document.getElementById('hostPassword').value.trim();
+    const watchPassword = document.getElementById('setWatchPassword').value.trim();
+
+    if (!room || !hostPassword || !watchPassword) {
+      loginMsg.textContent = '请输入房间名、主持人密码和观看密码';
+      return;
+    }
+    loginMsg.textContent = '';
+
+    socket.emit('hostLogin', { room, hostPassword, watchPassword, username }, (res) => {
+      if (res.success) {
+        isHost = true;
+        loginDiv.style.display = 'none';
+        mainDiv.style.display = 'block';
+        hostPanel.style.display = 'block';
+        initPlayer();
+        appendChatMessage('系统', `主持人 ${username} 登录成功，房间 ${room} 已准备`);
+      } else {
+        loginMsg.textContent = res.message || '主持人登录失败';
+      }
+    });
+  };
+
+  // 初始化Artplayer
+  function initPlayer() {
+    if (artplayer) {
+      artplayer.destroy();
+      artplayer = null;
+    }
+    artplayer = new Artplayer({
+      container: '#player',
+      autoplay: false,
+      autoSize: true,
+      theme: '#00bcd4',
+      controls: true,
+      url: '',
+      subtitle: {
+        url: '',
+        type: 'webvtt', // 根据你实际字幕格式调整
+      },
+    });
+
+    // 主持人操作同步
+    if (isHost) {
+      artplayer.on('play', () => {
+        socket.emit('hostControl', { playing: true, currentTime: artplayer.currentTime });
+      });
+      artplayer.on('pause', () => {
+        socket.emit('hostControl', { playing: false, currentTime: artplayer.currentTime });
+      });
+      artplayer.on('seeked', () => {
+        socket.emit('hostControl', { playing: !artplayer.paused, currentTime: artplayer.currentTime });
+      });
+    }
+  }
+
+  // 主持人添加视频
+  document.getElementById('sendVideo').onclick = () => {
+    if (!isHost) return;
+    const url = document.getElementById('videoUrl').value.trim();
+    if (!url) return alert('请输入视频链接');
+    socket.emit('hostAddVideo', url);
+  };
+
+  // 主持人添加字幕
+  document.getElementById('sendSubtitle').onclick = () => {
+    if (!isHost) return;
+    const url = document.getElementById('subtitleUrl').value.trim();
+    if (!url) return alert('请输入字幕链接');
+    socket.emit('hostAddSubtitle', url);
+  };
+
+  // 主持人播放按钮
+  document.getElementById('playBtn').onclick = () => {
+    if (!isHost) return;
+    artplayer.play();
+    socket.emit('hostControl', { playing: true, currentTime: artplayer.currentTime });
+  };
+
+  // 主持人暂停按钮
+  document.getElementById('pauseBtn').onclick = () => {
+    if (!isHost) return;
+    artplayer.pause();
+    socket.emit('hostControl', { playing: false, currentTime: artplayer.currentTime });
+  };
+
+  // 修改密码
+  document.getElementById('changePasswordsBtn').onclick = () => {
+    if (!isHost) return;
+    const newHostPassword = document.getElementById('newHostPassword').value.trim();
+    const newWatchPassword = document.getElementById('newWatchPassword').value.trim();
+    if (!newHostPassword && !newWatchPassword) {
+      changePwdMsg.style.color = '#f44';
+      changePwdMsg.textContent = '请输入新的密码';
+      return;
+    }
+    socket.emit('hostChangePasswords', { newHostPassword, newWatchPassword }, (res) => {
+      if (res.success) {
+        changePwdMsg.style.color = '#4f4';
+        changePwdMsg.textContent = '密码修改成功';
+        // 清空输入框
+        document.getElementById('newHostPassword').value = '';
+        document.getElementById('newWatchPassword').value = '';
+      } else {
+        changePwdMsg.style.color = '#f44';
+        changePwdMsg.textContent = res.message || '密码修改失败';
+      }
+    });
+  };
+
+  // 聊天功能
+  const chatDiv = document.getElementById('chat');
+  const chatInput = document.getElementById('chat-input');
+
+  chatInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      const msg = chatInput.value.trim();
+      if (msg) {
+        socket.emit('chatMessage', msg);
+        chatInput.value = '';
+      }
     }
   });
 
-  socket.emit('joinRoom', {roomId, host: isHost});
+  // 收到聊天消息
+  socket.on('chatMessage', (data) => {
+    appendChatMessage(data.id, data.msg);
+  });
 
-  const usersCountEl = document.getElementById('usersCount');
-  const hostControls = document.getElementById('hostControls');
-  const btnPlay = document.getElementById('btnPlay');
-  const btnPause = document.getElementById('btnPause');
-  const seekInput = document.getElementById('seekInput');
-  const btnSeek = document.getElementById('btnSeek');
-  const chatMessages = document.getElementById('chatMessages');
-  const chatInput = document.getElementById('chatInput');
-  const btnSend = document.getElementById('btnSend');
+  // 收到视频更新
+  socket.on('videoUpdate', ({ videoUrl, subtitleUrl }) => {
+    if (!artplayer) return;
+    if (videoUrl) artplayer.url = videoUrl;
+    if (subtitleUrl) artplayer.subtitle.url = subtitleUrl;
+  });
 
-  if (isHost) hostControls.style.display = 'block';
-
-  btnPlay.onclick = () => {
-    player.play();
-    socket.emit('playbackAction', {roomId, action: 'play', currentTime: player.currentTime});
-  };
-
-  btnPause.onclick = () => {
-    player.pause();
-    socket.emit('playbackAction', {roomId, action: 'pause', currentTime: player.currentTime});
-  };
-
-  btnSeek.onclick = () => {
-    const t = parseFloat(seekInput.value);
-    if (!isNaN(t) && t >= 0) {
-      player.currentTime = t;
-      socket.emit('playbackAction', {roomId, action: 'seek', currentTime: t});
+  // 收到视频状态同步
+  socket.on('videoState', (state) => {
+    if (!artplayer) return;
+    // 避免重复跳转
+    const currentDiff = Math.abs(artplayer.currentTime - state.currentTime);
+    if (currentDiff > 0.5) {
+      artplayer.currentTime = state.currentTime;
     }
-  };
-
-  player.on('play', () => {
-    if (!isHost) return;
-    socket.emit('playbackAction', {roomId, action: 'play', currentTime: player.currentTime});
-  });
-
-  player.on('pause', () => {
-    if (!isHost) return;
-    socket.emit('playbackAction', {roomId, action: 'pause', currentTime: player.currentTime});
-  });
-
-  player.on('seeked', () => {
-    if (!isHost) return;
-    socket.emit('playbackAction', {roomId, action: 'seek', currentTime: player.currentTime});
-  });
-
-  socket.on('syncAction', ({action, currentTime}) => {
-    if (isHost) return;
-    if (action === 'play') {
-      player.currentTime = currentTime;
-      player.play();
-    } else if (action === 'pause') {
-      player.currentTime = currentTime;
-      player.pause();
-    } else if (action === 'seek') {
-      player.currentTime = currentTime;
-    }
-  });
-
-  socket.on('syncState', state => {
-    if (isHost) return;
-    if (!state.paused) {
-      player.currentTime = state.time;
-      player.play();
+    if (state.playing) {
+      artplayer.play();
     } else {
-      player.currentTime = state.time;
-      player.pause();
+      artplayer.pause();
     }
   });
 
-  socket.on('userCount', count => {
-    usersCountEl.textContent = '在线人数: ' + count;
+  // 主持人身份确认
+  socket.on('hostAssigned', () => {
+    isHost = true;
+    hostPanel.style.display = 'block';
   });
 
-  socket.on('chatMessage', ({user, message}) => {
-    const div = document.createElement('div');
-    div.textContent = user + ': ' + message;
-    chatMessages.appendChild(div);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-  });
-
-  btnSend.onclick = () => {
-    const msg = chatInput.value.trim();
-    if (msg === '') return;
-    socket.emit('sendMessage', {roomId, user: isHost ? '主持人' : '观众', message: msg});
-    chatInput.value = '';
-  };
+  // 辅助函数
+  function appendChatMessage(id, msg) {
+    const el = document.createElement('div');
+    el.classList.add('chat-msg');
+    if (id === '系统') {
+      el.classList.add('system');
+      el.textContent = `【${id}】 ${msg}`;
+    } else {
+      el.textContent = `${id}: ${msg}`;
+    }
+    chatDiv.appendChild(el);
+    chatDiv.scrollTop = chatDiv.scrollHeight;
+  }
 </script>
 
 </body>
