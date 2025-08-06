@@ -2,290 +2,757 @@
 <html lang="zh">
 <head>
   <meta charset="UTF-8" />
-  <title>ArtPlayer 多人同步播放</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SyncPlayer</title>
   <script src="https://cdn.jsdelivr.net/npm/artplayer@5.2.3/dist/artplayer.min.js"></script>
   <script src="/socket.io/socket.io.js"></script>
-  <style>
-    body { font-family: sans-serif; margin: 0; background: #121212; color: #fff; }
-    #login { display: flex; flex-direction: column; align-items: center; padding: 2rem; }
-    #main { display: none; padding: 1rem; }
-    #player { width: 100%; height: 60vh; margin-bottom: 1rem; background: black; }
-    #chat { max-height: 30vh; overflow-y: auto; border: 1px solid #555; padding: 0.5rem; margin-top: 1rem; }
-    #chat-input { width: 100%; padding: 0.5rem; margin-top: 0.5rem; }
-    #host-panel { display: none; margin-top: 1rem; }
-    input, button {
-      padding: 0.5rem; margin: 0.3rem 0; width: 100%; max-width: 300px;
-      background: #222; color: white; border: 1px solid #444; border-radius: 3px;
+<style>
+  body {
+    background: #121212;
+    color: #fff;
+    font-family: sans-serif;
+    margin: 0;
+    padding: 0;
+    min-height: 100vh;
+  }
+
+  .container {
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 1rem;
+  }
+
+  #login, #hostPanel, #viewerPanel {
+    width: 100%;
+  }
+
+  #hostPanel, #viewerPanel {
+    display: none;
+  }
+
+  /* 主持人三栏布局 */
+  .main {
+    display: grid;
+    grid-template-columns: 250px 1fr 250px;
+    gap: 1rem;
+  }
+
+  /* 观众两栏布局 */
+  #viewerMain {
+    display: flex;
+    flex-direction: row;
+    gap: 1rem;
+    height: 100vh;
+    box-sizing: border-box;
+    padding: 1rem;
+  }
+
+  #viewerMain > #viewerPlayer {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #viewerMain > .side {
+    width: 250px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .side {
+    background: #1a1a1a;
+    border-radius: 4px;
+    box-sizing: border-box;
+    overflow: hidden;
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  #hostPlayer, #viewerPlayer {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 16 / 9;
+    background: #000;
+    border-radius: 6px;
+    overflow: hidden;
+    position: relative;
+  }
+
+  input, button, select {
+    padding: 0.5rem;
+    background: #222;
+    color: #fff;
+    border: 1px solid #444;
+    border-radius: 4px;
+  }
+
+  select, input {
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  button {
+    cursor: pointer;
+  }
+
+  .chat, .users {
+    background: #222;
+    padding: 0.5rem;
+    border-radius: 4px;
+    overflow-y: auto;
+  }
+
+  .chat {
+    flex: 1;
+    min-height: 100px;
+    margin-top: 0.5rem;
+  }
+
+  .users {
+    max-height: 200px;
+  }
+
+  h3 {
+    margin: 0.5rem 0 0.2rem;
+  }
+
+  #logout, #logoutV {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    background: #333;
+    padding: 0.3rem 0.6rem;
+    font-size: 0.9rem;
+    border: none;
+  }
+
+  .chat-input {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+
+  .chat-input input {
+    flex: 1;
+  }
+
+  /* === ✅ 响应式布局 === */
+  @media (max-width: 768px) {
+    .main {
+      display: flex;
+      flex-direction: column;
     }
-    button:hover {
-      background: #444;
-      cursor: pointer;
+
+    #viewerMain {
+      flex-direction: column;
+      height: auto;
+      padding: 0.5rem;
     }
-    .message { margin-bottom: 0.3rem; }
-    .system { color: #999; font-style: italic; }
-    .chat-msg { padding: 0.2rem 0; border-bottom: 1px solid #333; }
-  </style>
+
+    #viewerMain > .side {
+      width: 100%;
+      flex-direction: column;
+    }
+
+    #hostPlayer, #viewerPlayer {
+      aspect-ratio: 16 / 9;
+      height: auto;
+    }
+
+    #logout, #logoutV {
+      top: 5px;
+      right: 5px;
+    }
+  }
+</style>
 </head>
 <body>
-
-<div id="login">
-  <h2>普通用户加入</h2>
-  <input type="text" id="username" placeholder="用户名" autocomplete="off" />
-  <input type="text" id="room" placeholder="房间名" autocomplete="off" />
-  <input type="password" id="watchPassword" placeholder="观看密码" autocomplete="off" />
-  <button id="joinBtn">进入房间</button>
-
-  <hr style="width: 300px; margin: 2rem 0;" />
-  <h2>主持人登录或首次创建房间</h2>
-  <input type="text" id="hostUsername" placeholder="主持人用户名" autocomplete="off" />
-  <input type="text" id="hostRoom" placeholder="房间名" autocomplete="off" />
-  <input type="password" id="hostPassword" placeholder="主持人密码" autocomplete="off" />
-  <input type="password" id="setWatchPassword" placeholder="设置观看密码" autocomplete="off" />
-  <button id="hostLoginBtn">登录/创建房间</button>
-
-  <div id="loginMsg" style="color: #f44; margin-top: 1rem;"></div>
-</div>
-
-<div id="main">
-  <div id="player"></div>
-
-  <div id="host-panel">
-    <h3>🎛 主持人控制面板</h3>
-    <input type="text" id="videoUrl" placeholder="视频链接 (支持直链)" autocomplete="off" />
-    <input type="text" id="subtitleUrl" placeholder="字幕链接 (.ass)" autocomplete="off" />
-    <button id="sendVideo">添加视频</button>
-    <button id="sendSubtitle">添加字幕</button>
-    <button id="playBtn">播放</button>
-    <button id="pauseBtn">暂停</button>
-
-    <hr />
-    <h4>修改密码</h4>
-    <input type="password" id="newHostPassword" placeholder="新主持人密码" autocomplete="off" />
-    <input type="password" id="newWatchPassword" placeholder="新观看密码" autocomplete="off" />
-    <button id="changePasswordsBtn">修改密码</button>
-
-    <div id="changePwdMsg" style="color: #4f4; margin-top: 0.5rem;"></div>
+  <!-- 登录界面 -->
+  <div id="login">
+    <h2 style="text-align:center;">登录 SyncPlayer</h2>
+    <div style="display:flex; flex-direction:column; gap:0.5rem; width:300px; margin:0 auto;">
+      <input id="username" placeholder="昵称" />
+      <select id="role">
+        <option value="viewer">观众</option>
+        <option value="host">主持人</option>
+      </select>
+      <input type="password" id="hostPwd" placeholder="主持人密码（必填）" style="display:none" />
+      <input type="password" id="watchPwd" placeholder="观众密码（必填）" style="display:none" />
+      <button id="btnLogin">登录</button>
+      <div id="msg" style="color:red; text-align:center;"></div>
+    </div>
   </div>
 
-  <div id="chat"></div>
-  <input type="text" id="chat-input" placeholder="输入消息回车发送" autocomplete="off" />
-</div>
-
-<script>
-  const socket = io();
-
-  let artplayer = null;
-  let isHost = false;
-
-  // 登录和加入房间元素
-  const loginDiv = document.getElementById('login');
-  const mainDiv = document.getElementById('main');
-  const hostPanel = document.getElementById('host-panel');
-  const loginMsg = document.getElementById('loginMsg');
-  const changePwdMsg = document.getElementById('changePwdMsg');
-
-  // 普通用户加入
-  document.getElementById('joinBtn').onclick = () => {
-    const username = document.getElementById('username').value.trim();
-    const room = document.getElementById('room').value.trim();
-    const watchPassword = document.getElementById('watchPassword').value.trim();
-
-    if (!username || !room || !watchPassword) {
-      loginMsg.textContent = '请输入用户名、房间名和观看密码';
-      return;
+  <!-- 主持人面板 -->
+  <div id="hostPanel">
+    <button id="logout">退出</button>
+    <h2>主持人 面板</h2>
+    <div class="main">
+      <div class="side">
+        <h3>视频管理</h3>
+        <input id="videoUrl" placeholder="视频 URL" />
+        <button id="btnVideo">下发视频</button>
+        <input id="subUrl" placeholder="字幕 URL" />
+        <button id="btnSub">下发字幕</button>
+        <button id="btnPlay">播放</button>
+        <button id="btnPause">暂停</button>
+        <button id="btnDestroy">销毁房间</button>
+      </div>
+      <div id="hostPlayer"></div>
+      <div class="side">
+        <h3>房间管理</h3>
+        <select id="selRoom"><option value="">-- 选择或新建房间 --</option></select>
+        <input id="newRoom" placeholder="房间名（新建）" />
+        <input id="newPwd" placeholder="观众密码（新建）" />
+        <button id="btnJoinCreate">创建/加入</button>
+        <div id="roomInfo" style="margin:0.5rem 0;"></div>
+        <h3>聊天</h3>
+        <div id="hostChat" class="chat"></div>
+        <div class="chat-input">
+          <input id="hostChatIn" placeholder="输入消息" />
+          <button id="hostChatSend">发送</button>
+        </div>
+        <h3>用户列表</h3>
+        <div id="hostUsers" class="users"></div>
+      </div>
+    </div>
+  </div>
+  <!-- ✅ 修改后的观众面板 HTML -->
+  <div id="viewerPanel">
+    <button id="logoutV">退出</button>
+    <h2 id="viewerTitle">观众 面板</h2>
+    <div id="viewerMain">
+      <div id="viewerPlayer">
+        <div class="overlay"></div>
+      </div>
+      <div class="side">
+        <h3>聊天</h3>
+        <div id="viewerChat" class="chat"></div>
+        <div class="chat-input">
+          <input id="viewerChatIn" placeholder="输入消息" />
+          <button id="viewerChatSend">发送</button>
+        </div>
+        <h3>用户列表</h3>
+        <div id="viewerUsers" class="users"></div>
+      </div>
+    </div>
+  </div>
+  <script>
+    // —— 全局变量 ——
+    function saveFullSession(role, user, room = null) {
+      const data = { role, user };
+      if (room) data.room = room;
+      saveSession(data);
     }
-    loginMsg.textContent = '';
+    function formatTime(ts) {
+      const d = new Date(ts);
+      return d.toLocaleTimeString('zh-CN', { hour12: false });
+    }
+    function renderChatMsg(container, d, myId) {
+      let label = d.fromId === myId ? '我' : d.from;
+      if (d.role === 'host' && d.fromId !== myId) label += '（主持人）';
+      const timeSpan = document.createElement('span');
+      timeSpan.textContent = `[${formatTime(d.timestamp || Date.now())}]`;
+      timeSpan.style.color = '#888';
+      timeSpan.style.fontSize = '0.8rem';
+      timeSpan.style.marginRight = '0.5rem';
 
-    socket.emit('joinRoom', { room, username, watchPassword }, (res) => {
-      if (res.success) {
-        isHost = false;
-        loginDiv.style.display = 'none';
-        mainDiv.style.display = 'block';
-        hostPanel.style.display = 'none';
-        initPlayer();
-        appendChatMessage('系统', `欢迎 ${username} 加入房间 ${room}`);
-      } else {
-        loginMsg.textContent = res.message || '加入失败';
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = label;
+      if (d.fromId !== myId) nameSpan.style.color = getColorForId(d.fromId);
+
+      const msgDiv = document.createElement('div');
+      msgDiv.appendChild(timeSpan);
+      msgDiv.appendChild(nameSpan);
+      msgDiv.appendChild(document.createTextNode('：' + d.msg));
+
+      container.appendChild(msgDiv);
+      container.scrollTop = container.scrollHeight;
+    } 
+    function getColorForId(id) {
+      let hash = 0;
+      for (let i = 0; i < id.length; i++) {
+        hash = id.charCodeAt(i) + ((hash << 5) - hash);
       }
-    });
-  };
-
-  // 主持人登录或首次创建房间
-  document.getElementById('hostLoginBtn').onclick = () => {
-    const username = document.getElementById('hostUsername').value.trim() || '主持人';
-    const room = document.getElementById('hostRoom').value.trim();
-    const hostPassword = document.getElementById('hostPassword').value.trim();
-    const watchPassword = document.getElementById('setWatchPassword').value.trim();
-
-    if (!room || !hostPassword || !watchPassword) {
-      loginMsg.textContent = '请输入房间名、主持人密码和观看密码';
-      return;
+      const hue = Math.abs(hash % 360);
+      return `hsl(${hue}, 70%, 60%)`;
+    }    
+    let art = null;
+    let roomName = '';
+    let role = '';
+    // —— 会话管理（localStorage） —— 
+    function saveSession(data) {
+      localStorage.setItem('syncplayer_session', JSON.stringify(data));
     }
-    loginMsg.textContent = '';
-
-    socket.emit('hostLogin', { room, hostPassword, watchPassword, username }, (res) => {
-      if (res.success) {
-        isHost = true;
-        loginDiv.style.display = 'none';
-        mainDiv.style.display = 'block';
-        hostPanel.style.display = 'block';
-        initPlayer();
-        appendChatMessage('系统', `主持人 ${username} 登录成功，房间 ${room} 已准备`);
-      } else {
-        loginMsg.textContent = res.message || '主持人登录失败';
+    function loadSession() {
+      try {
+        return JSON.parse(localStorage.getItem('syncplayer_session'));
+      } catch {
+        return null;
       }
-    });
-  };
-
-  // 初始化Artplayer
-  function initPlayer() {
-    if (artplayer) {
-      artplayer.destroy();
-      artplayer = null;
     }
-    artplayer = new Artplayer({
-      container: '#player',
-      autoplay: false,
-      autoSize: true,
-      theme: '#00bcd4',
-      controls: true,
-      url: '',
-      subtitle: {
-        url: '',
-        type: 'webvtt', // 根据你实际字幕格式调整
-      },
-    });
+    function clearSession() {
+      localStorage.removeItem('syncplayer_session');
+    }
 
-    // 主持人操作同步
-    if (isHost) {
-      artplayer.on('play', () => {
-        socket.emit('hostControl', { playing: true, currentTime: artplayer.currentTime });
+    document.addEventListener('DOMContentLoaded', function() {
+      const socket = io();
+      const $ = id => document.getElementById(id);
+      let myId = null; 
+      socket.on('connect', () => { myId = socket.id; });
+      socket.on('roomClosed', () => {
+        console.log('[debug] 收到 roomClosed');
+
+        const isHostUI = document.getElementById('hostPanel')?.style.display === 'block';
+        const isViewerUI = document.getElementById('viewerPanel')?.style.display === 'block';
+
+        if (isHostUI) {
+          alert('房间已销毁，您可以重新创建房间');
+          roomName = '';
+          saveSession({ role: 'host', user: loadSession()?.user });
+          document.getElementById('roomInfo').innerText = '房间已销毁';
+          document.getElementById('hostChat').innerHTML = '';
+          document.getElementById('hostUsers').innerHTML = '';
+          if (art) { art.destroy(); art = null; }
+          loadRooms();
+        } else if (isViewerUI) {
+          if (confirm('⚠️ 房间已被主持人关闭，点击“确定”返回首页')) {
+            clearSession();
+            location.href = 'index.html';
+          }
+        } else {
+          console.warn('roomClosed 收到，但 UI 状态不明确');
+        }
       });
-      artplayer.on('pause', () => {
-        socket.emit('hostControl', { playing: false, currentTime: artplayer.currentTime });
+      socket.on('chatMessage', d => {
+        const target = (role === 'host') ? document.getElementById('hostChat') : document.getElementById('viewerChat');
+        renderChatMsg(target, d, myId);
       });
-      artplayer.on('seeked', () => {
-        socket.emit('hostControl', { playing: !artplayer.paused, currentTime: artplayer.currentTime });
+      function updatePwd() {
+        const r = $('role').value;
+        $('hostPwd').style.display  = r === 'host' ? 'block' : 'none';
+        $('watchPwd').style.display = r === 'viewer' ? 'block' : 'none';
+      }
+      $('role').addEventListener('change', updatePwd);
+      updatePwd();
+
+      // 登录
+      $('btnLogin').addEventListener('click', function() {
+        const user = $('username').value.trim();
+        const r = $('role').value;
+        $('msg').innerText = '';
+        if (!user) return $('msg').innerText = '请输入昵称';
+        if (r === 'host') {
+          socket.emit('hostLogin', { username: user, hostPassword: $('hostPwd').value }, res => {
+            if (res.success){
+            saveFullSession('host', user); // ✅ 立即保存身份，房间稍后保存
+            initHost(user);
+            } else $('msg').innerText = res.message;
+          });
+        } else {
+          socket.emit('joinRoom', { username: user, watchPassword: $('watchPwd').value }, res => {
+            if (res.success) startViewer(res);
+            else $('msg').innerText = res.message;
+          });
+        }
+      });
+
+      // 初始化主持人界面
+      function initHost(user) {
+        role = 'host';
+        $('login').style.display = 'none';
+        $('hostPanel').style.display = 'block';
+        loadRooms();
+        bindHost();
+        $('logout').addEventListener('click', () => {
+          socket.emit('logout');
+          clearSession();
+          location.reload();
+        });
+        const ses = loadSession();
+        if (ses?.room) {
+          $('selRoom').value = ses.room;
+          $('btnJoinCreate').click();
+        }
+      }
+      // 获取房间列表
+      function loadRooms() {
+        socket.emit('getRooms', null, res => {
+          if (!res.success) return;
+          const sel = $('selRoom');
+          sel.innerHTML = '<option value="">-- 选择或新建房间 --</option>';
+          res.rooms.forEach(rm => sel.append(new Option(rm.roomName, rm.roomName)));
+        });
+      }
+
+      // 主持人逻辑
+      function bindHost() {
+        // 创建/加入房间
+        $('btnJoinCreate').onclick = () => {
+          const sel = $('selRoom').value;
+          const rn = sel || $('newRoom').value.trim();
+          const pw = sel ? '' : $('newPwd').value.trim();
+          if (!rn) return alert('请输入房间名');
+          if (!sel && !pw) return alert('请输入观众密码');
+          const evt = sel ? 'joinRoomByHost' : 'createRoom';
+          const arg = sel ? { roomName: rn } : { roomName: rn, watchPassword: pw };
+          socket.emit(evt, arg, res => {
+            if (res.success) {
+              roomName = rn;
+              $('roomInfo').innerText = '房间：' + roomName;
+              const ses = loadSession();
+              if (ses?.user) {
+                saveFullSession('host', ses.user, roomName);
+              }
+              loadRooms();
+
+              // ✅ 加载视频并恢复状态（包括自动播放）
+              if (res.videoUrl) {
+                if (!art) {
+                  art = new Artplayer({ container:'#hostPlayer', autoSize:true, url: res.videoUrl });
+                  art.on('video:loadeddata', () => {
+                    if (res.subtitleUrl) art.switchSubtitle(res.subtitleUrl);
+                    if (res.videoState && res.videoState.syncedFrom === 'viewer') {
+                      art.currentTime = res.videoState.currentTime || 0;
+                      if (res.videoState.playing) {
+                        art.play().catch(() => {});
+                      } else {
+                        art.pause();
+                      }
+                        setTimeout(() => bindHostPlayerEvents(), 1000);
+                    } else {
+                      console.log('[host] 加入房间后未使用 videoState（无观众或是旧状态）');
+                     }
+                  });
+                } else {
+                  art.switchVideo(res.videoUrl);
+                  art.on('video:loadeddata', () => {
+                    if (res.subtitleUrl) art.switchSubtitle(res.subtitleUrl);
+                    if (res.videoState && res.videoState.syncedFrom === 'viewer') {
+                       art.currentTime = res.videoState.currentTime || 0;
+                       if (res.videoState.playing) {
+                         art.play().catch(() => {});
+                       } else {
+                         art.pause();
+                       }
+                         setTimeout(() => bindHostPlayerEvents(), 1000);
+                     }
+                  });
+                }
+                bindHostPlayerEvents();
+              }
+            } else alert(res.message);
+          });
+        };
+
+        // 下发视频
+        $('btnVideo').onclick = () => {
+          const url = $('videoUrl').value.trim();
+          if (!url) return alert('请输入视频 URL');
+          if (!art) art = new Artplayer({ container:'#hostPlayer', autoSize:true, autoPlay:false });
+          art.url = url;
+          socket.emit('hostAddVideo', url);
+          bindHostPlayerEvents();
+        };
+        // 下发字幕
+        $('btnSub').onclick = () => {
+          const url = $('subUrl').value.trim();
+          if (!url || !art) return alert('请先加载视频');
+          art.subtitle.url = url;
+          socket.emit('hostAddSubtitle', url);
+        };
+        // 播放
+        $('btnPlay').onclick = () => {
+          if (!art) return alert('请先加载视频');
+          art.play();
+          socket.emit('hostControl', { playing:true, currentTime:art.currentTime });
+        };
+        // 暂停
+        $('btnPause').onclick = () => {
+          if (!art) return alert('请先加载视频');
+           art.pause();
+           socket.emit('hostControl', { playing:false, currentTime: art.currentTime });
+        };
+
+        // 销毁
+        $('btnDestroy').onclick = () => {
+          if (confirm('销毁房间？')) {
+            socket.emit('destroyRoomByHost', roomName, res => {
+              if (res.success) {
+                $('roomInfo').innerText = '已销毁';
+                saveFullSession('host', loadSession().user);
+                loadRooms();
+              }
+            });
+          }
+        };
+
+        // 聊天
+        $('hostChatSend').onclick = () => {
+          const m = $('hostChatIn').value.trim();
+          if (!m) return;
+          socket.emit('chatMessage', m);
+          $('hostChatIn').value = '';
+        };
+        $('hostChatIn').addEventListener('keydown', e => { if (e.key==='Enter') $('hostChatSend').click(); });
+
+        // 定时同步状态
+        setInterval(() => {
+  if (art && art.__hasSync) {
+    // ✅ 如果暂停状态，就同步一次“暂停 + 时间”
+    if (art.paused) {
+      socket.emit('hostControl', {
+        playing: false,
+        currentTime: art.currentTime
+      });
+    } else {
+      socket.emit('hostControl', {
+        playing: true,
+        currentTime: art.currentTime
       });
     }
   }
+}, 5000);
 
-  // 主持人添加视频
-  document.getElementById('sendVideo').onclick = () => {
-    if (!isHost) return;
-    const url = document.getElementById('videoUrl').value.trim();
-    if (!url) return alert('请输入视频链接');
-    socket.emit('hostAddVideo', url);
-  };
+        // 监听后端广播
+        socket.on('videoUpdate', d => {
+          if (!art && d.videoUrl) art = new Artplayer({ container:'#hostPlayer', autoSize:true, autoPlay:false });
+          if (art && d.videoUrl) art.url = d.videoUrl;
+          if (art && d.subtitleUrl) art.switchSubtitle(d.subtitleUrl);
+          bindHostPlayerEvents();
+        });
+        socket.on('userList', list => {
+          $('hostUsers').innerHTML = list.map(u => `<div>${u}</div>`).join('');
+        });
+      }
 
-  // 主持人添加字幕
-  document.getElementById('sendSubtitle').onclick = () => {
-    if (!isHost) return;
-    const url = document.getElementById('subtitleUrl').value.trim();
-    if (!url) return alert('请输入字幕链接');
-    socket.emit('hostAddSubtitle', url);
-  };
+      // 同步事件绑定
+      function bindHostPlayerEvents() {
+  if (art.__hasSync) return;
+  art.__hasSync = true;
 
-  // 主持人播放按钮
-  document.getElementById('playBtn').onclick = () => {
-    if (!isHost) return;
-    artplayer.play();
-    socket.emit('hostControl', { playing: true, currentTime: artplayer.currentTime });
-  };
+  function sync() {
+    socket.emit('hostControl', {
+      playing: !art.paused,
+      currentTime: art.currentTime
+    });
+  }
 
-  // 主持人暂停按钮
-  document.getElementById('pauseBtn').onclick = () => {
-    if (!isHost) return;
-    artplayer.pause();
-    socket.emit('hostControl', { playing: false, currentTime: artplayer.currentTime });
-  };
+  art.on('play', sync);
+  art.on('pause', sync);
+  art.on('seeked', sync);
+}
 
-  // 修改密码
-  document.getElementById('changePasswordsBtn').onclick = () => {
-    if (!isHost) return;
-    const newHostPassword = document.getElementById('newHostPassword').value.trim();
-    const newWatchPassword = document.getElementById('newWatchPassword').value.trim();
-    if (!newHostPassword && !newWatchPassword) {
-      changePwdMsg.style.color = '#f44';
-      changePwdMsg.textContent = '请输入新的密码';
-      return;
+      // 观众逻辑
+      function startViewer(init) {
+        $('logoutV').addEventListener('click', () => {
+          socket.emit('logout');
+          clearSession();
+          location.reload();
+        });
+        role = 'viewer';
+        roomName = init.room;
+        if (init.chatHistory?.length) {
+          const target = $('viewerChat');
+          init.chatHistory.forEach(d => renderChatMsg(target, d, myId));
+        }
+        $('login').style.display = 'none';
+        $('viewerPanel').style.display = 'block';
+        $('viewerTitle').innerText = '观众 面板 房间：' + roomName;
+
+        $('viewerChatSend').onclick = () => {
+          const m = $('viewerChatIn').value.trim();
+          if (!m) return;
+          socket.emit('chatMessage', m);
+          $('viewerChatIn').value = '';
+        };
+        $('viewerChatIn').addEventListener('keydown', e => { if (e.key==='Enter') $('viewerChatSend').click(); });
+        let isPausedLock = false;
+        let lastState = { playing: null, time: null };
+        socket.on('videoUpdate', d => {
+          if (!art && d.videoUrl) {
+            art = new Artplayer({
+              container: '#viewerPlayer',
+              url: d.videoUrl,
+              autoplay: false,
+              autoSize: true,
+              controls: [],
+              setting: false,
+              playbackRate: false,
+              fastForward: false,
+              lock: true,
+            });
+            art.on('ready', () => {
+              art.hotkey = false;
+              if (d.subtitleUrl) art.switchSubtitle(d.subtitleUrl);
+              art.template.$player.style.pointerEvents = 'none';
+            });
+          }
+          if (art && d.videoUrl) art.switchVideo(d.videoUrl);
+          if (art && d.subtitleUrl) art.switchSubtitle(d.subtitleUrl);
+        });
+        socket.on('videoState', s => {
+          if (!art) return;
+          //  如果已暂停且重复接收到暂停，不执行任何操作，避免跳时间
+          if (isPausedLock && !s.playing) return;
+          // 时间偏移处理
+          if (Math.abs(art.currentTime - s.currentTime) > 0.5) {
+            art.currentTime = s.currentTime;
+          }
+          // 播放逻辑
+          if (s.playing && art.paused) {
+            art.play().catch(() => {});
+            isPausedLock = false; // 解除暂停锁
+          }
+          // 暂停逻辑
+          else if (!s.playing && !art.paused) {
+            art.pause();
+            isPausedLock = true; // 锁定暂停状态
+          }
+        });
+
+        socket.on('userList', list => {
+          $('viewerUsers').innerHTML = list.map(u => `<div>${u}</div>`).join('');
+        });
+        socket.on('requestViewerVideoState', () => {
+          if (!art) return;  
+          setTimeout(() => {
+            const state = {
+              currentTime: art.currentTime,
+              playing: !art.paused
+            };
+            socket.emit('viewerReportVideoState', state);
+          }, 200); // ✅ 延迟一点点时间，确保 currentTime 是“真实播放中”的
+        });
+        if (init.videoUrl) {
+          art = new Artplayer({ container:'#viewerPlayer', url:init.videoUrl, autoplay:false, autoSize:true, controls: [] });
+          art.on('video:loadeddata', () => {
+            if (init.videoState) {
+              art.currentTime = init.videoState.currentTime || 0;
+              init.videoState.playing ? art.play().catch(()=>{}) : art.pause();
+            }
+          });
+          art.on('ready', () => {
+  if (init.subtitleUrl) art.switchSubtitle(init.subtitleUrl);
+
+  // ✅ 更安全的位置：播放器 ready 后再请求状态
+  socket.emit('getCurrentVideoState', null, s => {
+    if (art && s) {
+      if (Math.abs(art.currentTime - s.currentTime) > 0.5) {
+        art.currentTime = s.currentTime;
+      }
+      if (s.playing && art.paused) {
+        art.play().catch(() => {});
+      } else if (!s.playing && !art.paused) {
+        art.pause();
+      }
     }
-    socket.emit('hostChangePasswords', { newHostPassword, newWatchPassword }, (res) => {
-      if (res.success) {
-        changePwdMsg.style.color = '#4f4';
-        changePwdMsg.textContent = '密码修改成功';
-        // 清空输入框
-        document.getElementById('newHostPassword').value = '';
-        document.getElementById('newWatchPassword').value = '';
+  });
+});
+        }
+      }
+
+      // 聊天输出
+      function append(container, text) {
+        const d = document.createElement('div');
+        d.innerText = text;
+        container.appendChild(d);
+        container.scrollTop = container.scrollHeight;
+      }
+
+      // 恢复会话
+      const ses = loadSession();
+      if (ses) {
+        role = ses.role;
+        const username = ses.user;
+        roomName = ses.room;
+        $('role').value = role;
+        updatePwd();
+        if (role === 'host') {
+          $('login').style.display = 'none';
+          $('hostPanel').style.display = 'block';
+          $('logout').addEventListener('click', () => {
+            socket.emit('logout');
+            clearSession();
+            location.reload();
+          });
+          bindHost();
+          $('roomInfo').innerText = '房间：' + roomName;
+          socket.emit('reconnectHost', { username, roomName }, res => {
+            if (res.success) {
+              if (res.chatHistory?.length) {
+                const target = $('hostChat');
+                res.chatHistory.forEach(d => renderChatMsg(target, d, myId));
+              }
+              if (res.videoUrl) {
+  if (!art) {
+    art = new Artplayer({ container:'#hostPlayer', autoSize:true, url: res.videoUrl });
+    art.on('video:loadeddata', () => {
+      if (res.subtitleUrl) art.switchSubtitle(res.subtitleUrl);
+      if (res.videoState && res.videoState.syncedFrom === 'viewer') {
+        art.currentTime = res.videoState.currentTime || 0;
+        if (res.videoState.playing) {
+          art.play().catch(() => {});
+        } else {
+          art.pause();
+        }
+          setTimeout(() => bindHostPlayerEvents(), 1000);
       } else {
-        changePwdMsg.style.color = '#f44';
-        changePwdMsg.textContent = res.message || '密码修改失败';
+        console.log('[host] videoState 无效或来自 host，跳过恢复状态');
+        console.log('[host] 恢复状态：', res.videoState);
       }
     });
-  };
-
-  // 聊天功能
-  const chatDiv = document.getElementById('chat');
-  const chatInput = document.getElementById('chat-input');
-
-  chatInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      const msg = chatInput.value.trim();
-      if (msg) {
-        socket.emit('chatMessage', msg);
-        chatInput.value = '';
+  } else {
+    art.switchVideo(res.videoUrl);
+    art.on('video:loadeddata', () => {
+      if (res.subtitleUrl) art.switchSubtitle(res.subtitleUrl);
+      if (res.videoState && res.videoState.syncedFrom === 'viewer') {
+        art.currentTime = res.videoState.currentTime || 0;
+        if (res.videoState.playing) {
+          art.play().catch(() => {});
+        } else {
+          art.pause();
+        }
+          setTimeout(() => bindHostPlayerEvents(), 1000);
       }
-    }
-  });
 
-  // 收到聊天消息
-  socket.on('chatMessage', (data) => {
-    appendChatMessage(data.id, data.msg);
-  });
-
-  // 收到视频更新
-  socket.on('videoUpdate', ({ videoUrl, subtitleUrl }) => {
-    if (!artplayer) return;
-    if (videoUrl) artplayer.url = videoUrl;
-    if (subtitleUrl) artplayer.subtitle.url = subtitleUrl;
-  });
-
-  // 收到视频状态同步
-  socket.on('videoState', (state) => {
-    if (!artplayer) return;
-    // 避免重复跳转
-    const currentDiff = Math.abs(artplayer.currentTime - state.currentTime);
-    if (currentDiff > 0.5) {
-      artplayer.currentTime = state.currentTime;
-    }
-    if (state.playing) {
-      artplayer.play();
-    } else {
-      artplayer.pause();
-    }
-  });
-
-  // 主持人身份确认
-  socket.on('hostAssigned', () => {
-    isHost = true;
-    hostPanel.style.display = 'block';
-  });
-
-  // 辅助函数
-  function appendChatMessage(id, msg) {
-    const el = document.createElement('div');
-    el.classList.add('chat-msg');
-    if (id === '系统') {
-      el.classList.add('system');
-      el.textContent = `【${id}】 ${msg}`;
-    } else {
-      el.textContent = `${id}: ${msg}`;
-    }
-    chatDiv.appendChild(el);
-    chatDiv.scrollTop = chatDiv.scrollHeight;
+    });
   }
-</script>
+}
+              bindHostPlayerEvents();
+            } else {
+              alert('房间恢复失败：' + res.message);
 
+              // ✅ 修正：只清除房间信息，保留登录身份
+              const ses = loadSession();
+              if (ses) {
+                saveFullSession('host', ses.user); // 不传 room
+              }
+
+              $('login').style.display = 'none';
+              $('hostPanel').style.display = 'block';
+              $('roomInfo').innerText = '请重新创建房间';
+              bindHost();
+              loadRooms();
+             }
+           });
+        } else {
+          $('login').style.display = 'none';
+          $('viewerPanel').style.display = 'block';
+          $('viewerTitle').innerText = '观众 面板 房间：' + roomName;
+          socket.emit('reconnectViewer', { username, roomName }, res => {
+            if (res.success) startViewer(res);
+            else {
+              alert('房间恢复失败：' + res.message);
+              clearSession(); location.reload();
+            }
+          });
+        }
+      }
+    });
+  </script>
 </body>
 </html>
